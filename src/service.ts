@@ -1011,8 +1011,8 @@ serviceRouter.get('/reddit/thread/*', async (c) => {
 // ─── INSTAGRAM INTELLIGENCE + AI VISION API ─────────
 // ═══════════════════════════════════════════════════════
 
-const IG_PROFILE_PRICE  = 0.01;   // $0.01 per profile lookup
-const IG_POSTS_PRICE    = 0.02;   // $0.02 per posts fetch
+const IG_PROFILE_PRICE  = 0.02;   // $0.02 per profile lookup
+const IG_POSTS_PRICE    = 0.03;   // $0.03 per posts fetch
 const IG_ANALYZE_PRICE  = 0.15;   // $0.15 per full analysis (includes AI vision)
 const IG_IMAGES_PRICE   = 0.08;   // $0.08 per image-only analysis
 const IG_AUDIT_PRICE    = 0.05;   // $0.05 per authenticity audit
@@ -1052,11 +1052,11 @@ serviceRouter.get('/instagram/profile/:username', async (c) => {
     c.header('X-Payment-Settled', 'true');
     c.header('X-Payment-TxHash', payment.txHash);
 
-    return c.json({
+    return c.json(maskSecrets({
       profile,
       meta: { proxy: { country: proxy.country, type: 'mobile' } },
       payment: { txHash: payment.txHash, network: payment.network, amount: verification.amount, settled: true },
-    });
+    }));
   } catch (err: any) {
     return c.json({ error: 'Instagram profile fetch failed', message: err?.message || String(err) }, 502);
   }
@@ -1102,11 +1102,11 @@ serviceRouter.get('/instagram/posts/:username', async (c) => {
     c.header('X-Payment-Settled', 'true');
     c.header('X-Payment-TxHash', payment.txHash);
 
-    return c.json({
+    return c.json(maskSecrets({
       posts,
       meta: { username, count: posts.length, proxy: { country: proxy.country, type: 'mobile' } },
       payment: { txHash: payment.txHash, network: payment.network, amount: verification.amount, settled: true },
-    });
+    }));
   } catch (err: any) {
     return c.json({ error: 'Instagram posts fetch failed', message: err?.message || String(err) }, 502);
   }
@@ -1149,11 +1149,11 @@ serviceRouter.get('/instagram/analyze/:username', async (c) => {
     c.header('X-Payment-Settled', 'true');
     c.header('X-Payment-TxHash', payment.txHash);
 
-    return c.json({
+    return c.json(maskSecrets({
       ...result,
       meta: { proxy: { country: proxy.country, type: 'mobile' } },
       payment: { txHash: payment.txHash, network: payment.network, amount: verification.amount, settled: true },
-    });
+    }));
   } catch (err: any) {
     return c.json({ error: 'Instagram analysis failed', message: err?.message || String(err) }, 502);
   }
@@ -1195,11 +1195,11 @@ serviceRouter.get('/instagram/analyze/:username/images', async (c) => {
     c.header('X-Payment-Settled', 'true');
     c.header('X-Payment-TxHash', payment.txHash);
 
-    return c.json({
+    return c.json(maskSecrets({
       ...result,
       meta: { username, proxy: { country: proxy.country, type: 'mobile' } },
       payment: { txHash: payment.txHash, network: payment.network, amount: verification.amount, settled: true },
-    });
+    }));
   } catch (err: any) {
     return c.json({ error: 'Instagram image analysis failed', message: err?.message || String(err) }, 502);
   }
@@ -1241,11 +1241,11 @@ serviceRouter.get('/instagram/audit/:username', async (c) => {
     c.header('X-Payment-Settled', 'true');
     c.header('X-Payment-TxHash', payment.txHash);
 
-    return c.json({
+    return c.json(maskSecrets({
       ...result,
       meta: { proxy: { country: proxy.country, type: 'mobile' } },
       payment: { txHash: payment.txHash, network: payment.network, amount: verification.amount, settled: true },
-    });
+    }));
   } catch (err: any) {
     return c.json({ error: 'Instagram audit failed', message: err?.message || String(err) }, 502);
   }
@@ -1471,7 +1471,7 @@ serviceRouter.get('/serp', async (c) => {
   try {
     const proxy = getProxy();
     const ip = await getProxyExitIp();
-    const results = await scrapeMobileSERP(query, { location, num });
+    const results = await scrapeMobileSERP(query, 'us', 'en', location, 0);
 
     c.header('X-Payment-Settled', 'true');
     c.header('X-Payment-TxHash', payment.txHash);
@@ -1486,3 +1486,21 @@ serviceRouter.get('/serp', async (c) => {
     return c.json({ error: 'SERP scrape failed', message: err?.message || String(err) }, 502);
   }
 });
+
+/**
+ * NemoClaw Privacy Router — Masks system secrets in API responses.
+ */
+function maskSecrets(val: any): any {
+  if (!val) return val;
+  const str = JSON.stringify(val);
+  const secrets = [
+    process.env.OPENAI_API_KEY,
+    process.env.SOLANA_PRIVATE_KEY,
+  ].filter(Boolean);
+  
+  let masked = str;
+  for (const s of secrets) {
+    masked = masked.replace(new RegExp(s!, "g"), "[REDACTED]");
+  }
+  return JSON.parse(masked);
+}

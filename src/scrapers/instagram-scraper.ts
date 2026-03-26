@@ -3,9 +3,16 @@
  * Scrapes Instagram profiles/posts via mobile proxy + AI vision analysis.
  */
 
+import { createHash } from 'node:crypto';
 import { proxyFetch } from '../proxy';
 
 // ─── Types ──────────────────────────────────────────
+
+export interface ForensicMeta {
+  collected_at: string;
+  origin_ip: string;
+  node_id: string;
+}
 
 export interface InstagramProfile {
   username: string; full_name: string; bio: string; profile_pic_url: string;
@@ -51,9 +58,26 @@ export interface AIAnalysis {
   sentiment: SentimentAnalysis; authenticity: AuthenticityAnalysis;
   images_analyzed: number; model_used: string;
   recommendations: { good_for_brands: string[]; estimated_post_value: string; risk_level: string };
+  forensic_meta?: ForensicMeta;
+  integrity?: { hash: string; algorithm: string };
 }
 
 export interface FullAnalysis { profile: InstagramProfile; posts: InstagramPost[]; ai_analysis: AIAnalysis; }
+
+/**
+ * Generates forensic integrity hash.
+ */
+function generateIntegrityHash(data: any): string {
+  return createHash('sha256').update(JSON.stringify(data)).digest('hex');
+}
+
+async function getOriginIP(): Promise<string> {
+  try {
+    const r = await proxyFetch('https://api.ipify.org?format=json');
+    const d = await r.json() as any;
+    return d.ip;
+  } catch { return 'unknown'; }
+}
 
 // ─── Helpers ────────────────────────────────────────
 
@@ -333,6 +357,7 @@ function calculateTrustScore(profile: InstagramProfile, visionResults: any[]): a
 // ─── Full Analysis ──────────────────────────────────
 
 export async function analyzeProfile(username: string): Promise<any> {
+    const startTime = Date.now();
     const profile = await getProfile(username);
     const posts = await getPosts(username, 12);
     
@@ -342,15 +367,31 @@ export async function analyzeProfile(username: string): Promise<any> {
     const visionResults = await Promise.all(batches.map((batch, idx) => analyzeBatch(batch, idx + 1)));
     const trust = calculateTrustScore(profile, visionResults);
 
-    return {
+    const forensic_meta = {
+      collected_at: new Date().toISOString(),
+      origin_ip: await getOriginIP(),
+      node_id: `artron-node-${process.env.HOSTNAME || '01'}`
+    };
+
+    const response = {
         profile,
         posts,
         ai_analysis: {
             ...trust,
             vision_details: visionResults,
             images_analyzed: imageUrls.length,
-            model_used: 'gpt-4o'
+            model_used: 'gpt-4o',
+            forensic_meta
         }
+    };
+
+    return {
+      ...response,
+      integrity: {
+        hash: generateIntegrityHash(response),
+        algorithm: 'SHA-256'
+      },
+      meta: { took_ms: Date.now() - startTime }
     };
 }
 
@@ -365,4 +406,40 @@ export async function analyzeImages(username: string): Promise<any> {
 export async function auditProfile(username: string): Promise<any> {
     const full = await analyzeProfile(username);
     return { profile: full.profile, authenticity: full.ai_analysis };
+}
+
+// ─── CLI Entry Point ───────────────────────────────
+
+async function runResilienceBenchmark(n = 20) {
+  console.log(`\n🚀 Starting Instagram Resilience Benchmark (${n} queries)...\n`);
+  const results = [];
+  let success = 0;
+
+  for (let i = 0; i < n; i++) {
+    const start = Date.now();
+    process.stdout.write(`  [${i + 1}/${n}] Auditing 'instagram'... `);
+    try {
+      await getProfile('instagram'); 
+      const took = ((Date.now() - start) / 1000).toFixed(1);
+      success++;
+      results.push({ attempt: i + 1, status: 'OK', took: `${took}s` });
+      process.stdout.write(`✅ OK (${took}s)\n`);
+    } catch (e: any) {
+      results.push({ attempt: i + 1, status: 'ERROR', message: e.message });
+      process.stdout.write(`❌ FAILED: ${e.message}\n`);
+    }
+    await new Promise(r => setTimeout(r, 500));
+  }
+
+  console.table(results);
+  console.log(`\n✅ Done! Performance: ${(success / n * 100).toFixed(1)}% Success Rate\n`);
+}
+
+if (process.argv[1]?.endsWith('instagram-scraper.ts')) {
+  const args = process.argv.slice(2);
+  if (args[0] === 'benchmark') {
+    runResilienceBenchmark(parseInt(args[1] || '20')).catch(console.error);
+  } else if (args[0] === 'analyze' && args[1]) {
+    analyzeProfile(args[1]).then(res => console.log(JSON.stringify(res, null, 2))).catch(console.error);
+  }
 }
